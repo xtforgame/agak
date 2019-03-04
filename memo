@@ -1,0 +1,31 @@
+go env | grep GOCACHE
+
+export GO111MODULE=on
+
+go mod vendor
+
+# go fmt ./...&&go test ./... -v -mod=vendor
+
+go fmt ./...&&go test ./tests/... -v -mod=vendor
+
+go clean -cache
+
+go fmt ./...&&go run -v -mod=vendor main/server.go
+go fmt ./...&&go run -v -mod=vendor main/client.go
+go fmt ./...&&go run -v -mod=vendor main.go
+
+go fmt ./...&&go run -v -mod=vendor main/server.go --config=config.yml
+
+go fmt ./...&&go run -v -mod=vendor main/testserver.go --config=config.yml
+
+bash ./docker/bin/build.sh
+bash ./docker/alpine3.9/build.sh
+
+docker-compose down
+docker-compose build
+docker-compose up -d
+docker-compose logs -f agak
+
+docker-compose down
+docker-compose up -d
+docker-compose logs -f agak
