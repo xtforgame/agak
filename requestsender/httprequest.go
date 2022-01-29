@@ -154,14 +154,21 @@ type TaskRunnerOptions struct {
 	RequestInterval     time.Duration
 	WaitForPreviousTask bool
 
-	ShouldRun    func(*RequestTask, int) bool
-	GetDelayTime func(*RequestTask, int) time.Duration
-	GetCache     func(ctx context.Context, task *RequestTask, options TaskRunnerOptions) *TaskResult
+	ShouldRun         func(*RequestTask, int) bool
+	GetDelayTime      func(*RequestTask, int, *TaskRunnerOptions, *TaskResult) time.Duration
+	TryEarlyDone      func(*RequestTask, int, *TaskRunnerOptions, *TaskResult) bool
+	GetCacheOrVirtual func(ctx context.Context, task *RequestTask, options TaskRunnerOptions) *TaskResult
+	// https://github.com/ewasm/wasm-metering
+	UseRequestGas func(gas int) bool
 
-	HandleTaskResult func(*RequestTask, int, *TaskResult, chan *TaskResult, chan bool)
+	HandleTaskResult   func(*RequestTask, int, *TaskResult, chan *TaskResult, chan bool)
+	HandleNoCacheFound func(*RequestTask, *TaskResult) error
 
 	Retry      int
 	RetryDelay time.Duration
+
+	OnFail    func(task *TaskResult)
+	OnSuccess func(task *TaskResult)
 }
 
 type RequestTask struct {
@@ -185,11 +192,33 @@ type RequestTask struct {
 	CustomData map[string]interface{}
 }
 
+func (task *RequestTask) EnsureCustomData() map[string]interface{} {
+	if task.CustomData == nil {
+		task.CustomData = map[string]interface{}{}
+	}
+	return task.CustomData
+}
+
+func (task *RequestTask) GetCustomData(key string) interface{} {
+	if task.CustomData == nil {
+		return nil
+	}
+	return task.CustomData[key]
+}
+
+func (task *RequestTask) SetCustomData(key string, data interface{}) {
+	customData := task.EnsureCustomData()
+	customData[key] = data
+}
+
 type TaskResult struct {
 	Task          *RequestTask
 	RequestResult *RequestResult
 	Errors        []error
+	FlowError     error
+	IsVirtual     bool
 	IsFromCache   bool
+	HasDownloaded bool
 
 	CustomData map[string]interface{}
 }
@@ -212,6 +241,34 @@ func NewRequestSender(proxyUrls []string) *RequestSender {
 
 func (reqSender *RequestSender) SendRequest(ctx context.Context, config *RequestConfig) (*RequestResult, error) {
 	return reqSender.client.SendRequest(ctx, config)
+}
+
+func (reqSender *RequestSender) SendRequestWithTimeout(ctx context.Context, config *RequestConfig, expiryTime time.Duration) (*RequestResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c, cancel := context.WithCancel(ctx)
+
+	errChan := make(chan error, 0)
+	resultChan := make(chan *RequestResult, 0)
+	go func() {
+		res, err := reqSender.client.SendRequest(c, config)
+		if err != nil {
+			errChan <- err
+		} else {
+			resultChan <- res
+		}
+	}()
+
+	select {
+	case err := <-errChan:
+		return nil, err
+	case result := <-resultChan:
+		return result, nil
+	case <-time.After(expiryTime):
+		cancel()
+		return nil, errors.New("timeout")
+	}
 }
 
 func (reqSender *RequestSender) SendRequestByMultipleProxies(
@@ -314,8 +371,17 @@ func (reqSender *RequestSender) RunTask(
 	options TaskRunnerOptions,
 ) *TaskResult {
 	result := &TaskResult{}
-	if task.RequestConfig.Url == "" {
+	if task.RequestConfig == nil {
+		result.Errors = []error{errors.New("request config is empty(task: " + task.Name + ")")}
+		return result
+	} else if task.RequestConfig.Url == "" {
 		result.Errors = []error{errors.New("url is empty(task: " + task.Name + ")")}
+		return result
+	}
+
+	if options.UseRequestGas != nil && !options.UseRequestGas(1) {
+		result.Errors = []error{errors.New("no gas left")}
+		return result
 	}
 
 	if task.UseProxy {
@@ -382,12 +448,27 @@ func (reqSender *RequestSender) RunTasks(
 
 	getDelayTime := options.GetDelayTime
 	if getDelayTime == nil {
-		getDelayTime = func(task *RequestTask, taskIndex int) time.Duration { return task.TaskRunnerOptions.RequestInterval }
+		getDelayTime = func(task *RequestTask, taskIndex int, options *TaskRunnerOptions, result *TaskResult) time.Duration {
+			if result != nil && (result.IsFromCache || result.IsVirtual) {
+				return 0
+			}
+			return task.TaskRunnerOptions.RequestInterval
+		}
 	}
 
-	getCache := options.GetCache
-	if getCache == nil {
-		getCache = func(ctx context.Context, task *RequestTask, options TaskRunnerOptions) *TaskResult { return nil }
+	tryEarlyDone := options.TryEarlyDone
+	if tryEarlyDone == nil {
+		tryEarlyDone = func(task *RequestTask, taskIndex int, options *TaskRunnerOptions, result *TaskResult) bool {
+			if result != nil && (result.IsFromCache || result.IsVirtual) {
+				return true
+			}
+			return false
+		}
+	}
+
+	getCacheOrVirtual := options.GetCacheOrVirtual
+	if getCacheOrVirtual == nil {
+		getCacheOrVirtual = func(ctx context.Context, task *RequestTask, options TaskRunnerOptions) *TaskResult { return nil }
 	}
 
 	handleTaskResult := options.HandleTaskResult
@@ -395,6 +476,17 @@ func (reqSender *RequestSender) RunTasks(
 		handleTaskResult = func(task *RequestTask, taskIndex int, taskResult *TaskResult, taskResultChan chan *TaskResult, cancelChan chan bool) {
 			taskResultChan <- taskResult
 		}
+	}
+
+	handleNoCacheFound := options.HandleNoCacheFound
+	if handleNoCacheFound == nil {
+		handleNoCacheFound = func(task *RequestTask, taskResult *TaskResult) error {
+			return nil
+		}
+	}
+
+	stop := func() {
+		stopped = true
 	}
 
 	finish := func() {
@@ -411,21 +503,34 @@ func (reqSender *RequestSender) RunTasks(
 			if stopped == true || !shouldRun(t, i) {
 				break
 			}
-			run := func() {
+			run := func() *TaskResult {
 				task := t
 				defer wg.Done()
-				result := getCache(nil, task, options)
+				result := getCacheOrVirtual(nil, task, options)
 				if result == nil {
+					err := handleNoCacheFound(task, result)
+					if err != nil {
+						result = &TaskResult{
+							Task:      task,
+							FlowError: err,
+						}
+						handleTaskResult(task, i, result, taskResultChan, cancelChan)
+						stop()
+						return result
+					}
 					result = reqSender.RunTask(nil, task, options)
-					if task.TransformFromResponse != nil {
+					if task.TransformFromResponse != nil && result.RequestResult != nil {
 						task.TransformFromResponse(task, i, result)
 					}
+					result.HasDownloaded = true
 					result.IsFromCache = false
 				} else {
-					if task.TransformFromCache != nil {
-						task.TransformFromCache(task, i, result)
+					if !result.IsVirtual {
+						if task.TransformFromCache != nil {
+							task.TransformFromCache(task, i, result)
+						}
+						result.IsFromCache = true
 					}
-					result.IsFromCache = true
 				}
 				if task.Transform != nil {
 					task.Transform(task, i, result)
@@ -436,18 +541,31 @@ func (reqSender *RequestSender) RunTasks(
 				} else {
 					handleTaskResult(task, i, result, taskResultChan, cancelChan)
 				}
+				return result
 			}
+			earlyDoneChan := make(chan bool, 0)
+			var result *TaskResult
 			if options.WaitForPreviousTask {
 				wg.Add(1)
-				run()
+				result = run()
 			} else {
 				wg.Add(1)
-				go run()
+				go func() {
+					result := run()
+					if tryEarlyDone(t, i, &options, result) {
+						earlyDoneChan <- true
+					}
+				}()
 			}
 			if i == len(tasks)-1 {
 				break
 			}
-			time.Sleep(getDelayTime(t, i))
+			if !stopped {
+				select {
+				case <-earlyDoneChan:
+				case <-time.After(getDelayTime(t, i, &options, result)):
+				}
+			}
 		}
 		wg.Wait()
 		finish()
@@ -458,3 +576,5 @@ func (reqSender *RequestSender) RunTasks(
 		FinishChan:     finishChan,
 	}
 }
+
+var BasicRequestSenderInst *RequestSender = NewRequestSender([]string{})

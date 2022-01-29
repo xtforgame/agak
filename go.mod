@@ -4,6 +4,7 @@ go 1.12
 
 require (
 	github.com/go-chi/chi v4.0.2+incompatible
+	github.com/go-chi/cors v1.2.0
 	github.com/gorilla/websocket v1.4.0
 	github.com/mattn/go-sqlite3 v1.11.0
 	github.com/robfig/cron/v3 v3.0.1

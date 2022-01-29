@@ -8,6 +8,18 @@ import (
 	"io/ioutil"
 )
 
+type AppConfig struct {
+	Image       string `yaml:"image"`
+	Container   string `yaml:"container"`
+	Endpoint    string `yaml:"endpoint"`
+	Network     string `yaml:"network"`
+	ExposedPort string `yaml:"exposedPort"`
+
+	EkeyMountPath   string `yaml:"ekeyMountPath"`
+	ConfigMountPath string `yaml:"configMountPath"`
+	IsSecondary     bool   `yaml:"isSecondary"`
+}
+
 type Config struct {
 	RequestSender requestsender.RequestSenderConfig `yaml:"requestSender"`
 }

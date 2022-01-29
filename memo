@@ -1,22 +1,14 @@
-go env | grep GOCACHE
-
-export GO111MODULE=on
-
 go mod vendor
 
-# go fmt ./...&&go test ./... -v -mod=vendor
+// ===============
 
-go fmt ./...&&go test ./tests/... -v -mod=vendor
-
-go clean -cache
-
-go fmt ./...&&go run -v -mod=vendor main/server.go
-go fmt ./...&&go run -v -mod=vendor main/client.go
+go fmt ./...&&go run -v -mod=vendor main/server/server.go
+go fmt ./...&&go run -v -mod=vendor main/client/client.go
 go fmt ./...&&go run -v -mod=vendor main.go
 
-go fmt ./...&&go run -v -mod=vendor main/server.go --config=config.yml
+go fmt ./...&&go run -v -mod=vendor main/server/server.go --config=config.yml
 
-go fmt ./...&&go run -v -mod=vendor main/testserver.go --config=config.yml
+go fmt ./...&&go run -v -mod=vendor main/testserver/testserver.go --config=config.yml
 
 bash ./docker/bin/build.sh
 bash ./docker/alpine3.9/build.sh

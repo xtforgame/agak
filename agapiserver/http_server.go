@@ -10,6 +10,7 @@ import (
 	// "encoding/json"
 	// "fmt"
 	"github.com/go-chi/chi"
+	"github.com/go-chi/cors"
 	// funk "github.com/thoas/go-funk"
 	"github.com/xtforgame/agak/gbcore"
 	"github.com/xtforgame/agak/serverutils"
@@ -19,6 +20,7 @@ import (
 	"github.com/xtforgame/cmdraida/crbasic"
 	"github.com/xtforgame/cmdraida/crcore"
 	// "github.com/xtforgame/cmdraida/t1"
+	"github.com/xtforgame/agak/appresourcesmgr"
 	"os"
 	// "strings"
 )
@@ -42,11 +44,20 @@ func NewHttpServer() *HttpServer {
 
 var runtimeFolder = "./runtime"
 
-func (hs *HttpServer) Init() {
+func (hs *HttpServer) Init(appResourcesManager *appresourcesmgr.AppResourcesManager) {
 	os.RemoveAll(runtimeFolder)
 	os.MkdirAll(runtimeFolder, os.ModePerm)
 	hs.taskManager = crbasic.NewTaskManager(runtimeFolder, gbcore.NewReporterT1)
 	hs.taskManager.Init()
+
+	cors := cors.New(cors.Options{
+		AllowedOrigins:   []string{"*"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		AllowCredentials: true,
+		MaxAge:           300, // Maximum value not ignored by any of major browsers
+	})
+	hs.router.Use(cors.Handler)
 
 	// hs.router.FileServer("/", http.Dir("web/"))
 	// FileServer(hs.router, "/assets", http.Dir("./assets"))

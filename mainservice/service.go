@@ -4,6 +4,7 @@ import (
 	// "context"
 	"fmt"
 	"github.com/xtforgame/agak/agapiserver"
+	"github.com/xtforgame/agak/appresourcesmgr"
 	"github.com/xtforgame/agak/config"
 	"github.com/xtforgame/agak/requestsender"
 	"github.com/xtforgame/agak/scheduler"
@@ -23,11 +24,12 @@ type SbMainServiceOptions struct {
 }
 
 type SbMainService struct {
-	config        *config.Config
-	options       SbMainServiceOptions
-	mainScheduler *scheduler.Scheduler
-	httpServer    *agapiserver.HttpServer
-	reqSender     *requestsender.RequestSender
+	config              *config.Config
+	options             SbMainServiceOptions
+	mainScheduler       *scheduler.Scheduler
+	appResourcesManager *appresourcesmgr.AppResourcesManager
+	httpServer          *agapiserver.HttpServer
+	reqSender           *requestsender.RequestSender
 }
 
 func NewSbMainService(c *config.Config, options SbMainServiceOptions) *SbMainService {
@@ -42,6 +44,7 @@ func NewSbMainService(c *config.Config, options SbMainServiceOptions) *SbMainSer
 		httpServer:    agapiserver.NewHttpServer(),
 		reqSender:     requestsender.NewRequestSender(c.RequestSender.Proxies),
 	}
+	ms.appResourcesManager = appresourcesmgr.NewAppResourcesManager(&config.AppConfig{})
 	return ms
 }
 
@@ -71,7 +74,8 @@ func (ms *SbMainService) GetReqSender() *requestsender.RequestSender {
 
 func (ms *SbMainService) Init() {
 	ms.mainScheduler.Init()
-	ms.httpServer.Init()
+	ms.appResourcesManager.Init()
+	ms.httpServer.Init(ms.appResourcesManager)
 }
 
 func (ms *SbMainService) Destroy() {
@@ -228,14 +232,14 @@ func (ms *SbMainService) RegisterAllJobs() {
 
 func (ms *SbMainService) Start() {
 	// utils.SlackAlert(ms.config.Slack.Webhook, "Start")
-	// b, err := utils.ZipLocalFolder(stockfetcher.CacheFolder, "/twse-ticks")
+	// b, err := utils.ZipLocalFolder(appResourcesfetcher.CacheFolder, "/twse-ticks")
 	// if err == nil {
 	// 	ioutil.WriteFile("xxxxxxx.zip", b, 0644)
-	// 	err = utils.RemoveContents(stockfetcher.CacheFolder)
+	// 	err = utils.RemoveContents(appResourcesfetcher.CacheFolder)
 	// 	retryCounter := 0
 	// 	for err != nil && retryCounter < 10 {
 	// 		retryCounter++
-	// 		err = utils.RemoveContents(stockfetcher.CacheFolder)
+	// 		err = utils.RemoveContents(appResourcesfetcher.CacheFolder)
 	// 	}
 	// }
 	var wg sync.WaitGroup
