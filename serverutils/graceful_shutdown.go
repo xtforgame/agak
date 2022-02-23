@@ -2,6 +2,7 @@ package serverutils
 
 import (
 	"fmt"
+	"context"
 	"github.com/xtforgame/agak/utils"
 	"net"
 	"net/http"
@@ -22,7 +23,7 @@ func RunAndWaitGracefulShutdown(server *http.Server) {
 
 	// Stop the service gracefully.
 	fmt.Println("start shutdown")
-	fmt.Println("shutdown result :", server.Shutdown(nil))
+	fmt.Println("shutdown result :", server.Shutdown(context.Background()))
 	fmt.Println("shutdown called")
 
 	fmt.Println("error :", <-chBack)
@@ -52,7 +53,7 @@ func RunAndWaitGracefulShutdownUnixSoclet(server *http.Server, filepath string) 
 
 	// Stop the service gracefully.
 	fmt.Println("start shutdown")
-	fmt.Println("shutdown result :", server.Shutdown(nil))
+	fmt.Println("shutdown result :", server.Shutdown(context.Background()))
 	fmt.Println("shutdown called")
 
 	fmt.Println("error :", <-chBack)
